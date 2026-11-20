@@ -545,23 +545,71 @@ class Weather:
         return WMO.get(self.code, ("", "cloud"))[1]
 
 
-def fetch_weather() -> Weather | None:
+MET_SYMBOL = [("thunder", 95), ("heavyrain", 65), ("rainshowers", 80), ("lightrain", 61), ("drizzle", 51),
+              ("rain", 63), ("sleet", 63), ("snow", 63), ("fog", 45), ("partlycloudy", 2), ("fair", 1),
+              ("clearsky", 0), ("cloudy", 3)]
+
+
+def _get_json(url, params, headers=None, tries=3):
+    """GET JSON, thử lại vài lần (Open-Meteo đôi khi chặn/giới hạn IP của GitHub Actions)."""
+    import time
     import requests
-    try:
-        r = requests.get("https://api.open-meteo.com/v1/forecast", params={
-            "latitude": LAT, "longitude": LON, "timezone": str(TZ), "forecast_days": 1,
-            "current": "temperature_2m,weather_code",
-            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-        }, timeout=20).json()
-        w = Weather(r["current"]["temperature_2m"], r["current"]["weather_code"],
-                    r["daily"]["temperature_2m_min"][0], r["daily"]["temperature_2m_max"][0],
-                    r["daily"]["precipitation_probability_max"][0] or 0)
-    except Exception as e:  # thời tiết lỗi thì vẫn vẽ phần còn lại
-        print("Không lấy được thời tiết:", e)
+    last = None
+    for i in range(tries):
+        try:
+            r = requests.get(url, params=params, headers=headers or {}, timeout=20)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last = e
+            time.sleep(3 * (i + 1))
+    raise last
+
+
+def _weather_openmeteo() -> Weather:
+    r = _get_json("https://api.open-meteo.com/v1/forecast", {
+        "latitude": LAT, "longitude": LON, "timezone": str(TZ), "forecast_days": 1,
+        "current": "temperature_2m,weather_code",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+    })
+    return Weather(r["current"]["temperature_2m"], r["current"]["weather_code"],
+                   r["daily"]["temperature_2m_min"][0], r["daily"]["temperature_2m_max"][0],
+                   r["daily"]["precipitation_probability_max"][0] or 0)
+
+
+def _weather_met() -> Weather:
+    """Dự phòng: MET Norway (api.met.no), miễn phí, không cần khoá."""
+    r = _get_json("https://api.met.no/weatherapi/locationforecast/2.0/complete",
+                  {"lat": round(LAT, 4), "lon": round(LON, 4)},
+                  headers={"User-Agent": "kindle-dashboard github.com/tranvinhcopsn-maker/kindle-dashboard"})
+    ts = r["properties"]["timeseries"]
+    temps = [t["data"]["instant"]["details"]["air_temperature"] for t in ts[:24]]
+    sym = ""
+    for t in ts[:3]:
+        sym = (t["data"].get("next_1_hours") or t["data"].get("next_6_hours") or {}).get("summary", {}).get("symbol_code", "")
+        if sym:
+            break
+    code = next((c for k, c in MET_SYMBOL if k in sym), 3)
+    probs = [(t["data"].get("next_1_hours") or {}).get("details", {}).get("probability_of_precipitation")
+             for t in ts[:12]]
+    probs = [p for p in probs if p is not None]
+    return Weather(temps[0], code, min(temps), max(temps), min(100, round(max(probs))) if probs else 0)
+
+
+def fetch_weather() -> Weather | None:
+    w = None
+    for name, fn in (("Open-Meteo", _weather_openmeteo), ("MET Norway", _weather_met)):
+        try:
+            w = fn()
+            print("Thời tiết lấy từ", name)
+            break
+        except Exception as e:  # thời tiết lỗi thì vẫn vẽ phần còn lại
+            print(f"Không lấy được thời tiết từ {name}:", e)
+    if w is None:
         return None
     try:
-        a = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params={
-            "latitude": LAT, "longitude": LON, "current": "us_aqi"}, timeout=20).json()
+        a = _get_json("https://air-quality-api.open-meteo.com/v1/air-quality",
+                      {"latitude": LAT, "longitude": LON, "current": "us_aqi"}, tries=2)
         w.aqi = round(a["current"]["us_aqi"])
     except Exception:
         pass
