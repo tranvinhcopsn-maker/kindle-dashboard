@@ -16,6 +16,14 @@ log() {
   if [ "$(wc -c < "$LOG")" -gt 200000 ]; then tail -n 300 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
 }
 
+# Đèn nền: tắt (hoặc chỉnh mức FRONTLIGHT trong config.sh) để đỡ tốn pin; thoát dashboard thì trả lại mức cũ
+set_light() {
+  lipc-set-prop com.lab126.powerd flIntensity "$1" 2>/dev/null
+  for b in /sys/class/backlight/*/brightness; do
+    [ -w "$b" ] && echo "$1" > "$b" 2>/dev/null
+  done
+}
+
 wifi() { lipc-set-prop com.lab126.cmd wirelessEnable "$1" 2>/dev/null; }
 
 battery() {
@@ -34,6 +42,9 @@ init() {
   initctl stop webreader >/dev/null 2>&1
   { echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor; } 2>/dev/null
   lipc-set-prop com.lab126.powerd preventScreenSaver 1 2>/dev/null
+  OLD_LIGHT=$(lipc-get-prop com.lab126.powerd flIntensity 2>/dev/null)
+  echo "${OLD_LIGHT:-}" > /tmp/dashboard_old_light
+  set_light "${FRONTLIGHT:-0}"
 }
 
 wait_net() {
@@ -80,6 +91,7 @@ send_battery() {
 }
 
 fetch_and_show() {
+  set_light "${FRONTLIGHT:-0}"   # máy vừa thức dậy có thể tự bật đèn lại
   wifi 1
   if ! wait_net; then
     log "Không có mạng"
@@ -154,6 +166,7 @@ go_to_sleep() {
   if { echo 0 > "$RTC/wakealarm" &&
        echo "+${secs}" > "$RTC/wakealarm" &&
        echo mem > /sys/power/state; } 2>/dev/null; then
+    set_light "${FRONTLIGHT:-0}"
     # Tỉnh dậy sớm hơn giờ hẹn quá 60 giây = có người bấm nút nguồn → thoát dashboard
     if [ "$(date +%s)" -lt $(( wake_at - 60 )) ]; then
       exit_dashboard
@@ -169,6 +182,8 @@ exit_dashboard() {
   eips -c
   eips 1 1 "Dang thoat dashboard, cho chut..."
   lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null
+  ol=$(cat /tmp/dashboard_old_light 2>/dev/null)
+  [ -n "$ol" ] && set_light "$ol"
   wifi 1
   /etc/init.d/framework start 2>/dev/null || {
     start lab126_gui >/dev/null 2>&1
