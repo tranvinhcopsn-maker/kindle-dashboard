@@ -3,10 +3,10 @@ name: Cập nhật dashboard Kindle
 on:
   schedule:
     # Giờ trong cron là UTC (giờ VN = UTC + 7). GitHub có thể chạy trễ.
-    # 8:00–23:45 giờ VN: 15 phút/lần (01:00–16:45 UTC)
-    - cron: "*/15 1-16 * * *"
-    # 0:00 và 4:00 giờ VN: 4 tiếng/lần (17:00, 21:00 UTC)
-    - cron: "0 17,21 * * *"
+    # 8:00–21:45 giờ VN: 15 phút/lần (01:00–14:45 UTC)
+    - cron: "*/15 1-14 * * *"
+    # 22:00, 22:15, 22:30 giờ VN (15:00–15:30 UTC). Sau 22:30 nghỉ tới 8:00 sáng.
+    - cron: "0,15,30 15 * * *"
   workflow_dispatch:
   push:
     branches: [main]

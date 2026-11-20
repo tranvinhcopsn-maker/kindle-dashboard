@@ -7,6 +7,8 @@ DIR="${DASH_DIR:-/mnt/us/dashboard}"
 LOG="$DIR/log.txt"
 IMG="/tmp/dashboard.png"
 . "$DIR/config.sh"
+# Đồng hồ Kindle chưa đăng ký thường để giờ UTC → ép giờ Việt Nam (POSIX: ICT-7 = UTC+7)
+export TZ="${DASH_TZ:-ICT-7}"
 
 log() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"
@@ -45,6 +47,31 @@ wait_net() {
   return 1
 }
 
+# Vẽ % pin ở góc dưới bên phải (đè lên ảnh). Ưu tiên FBInk (Universal Hotfix có cài), không có thì dùng eips.
+find_fbink() {
+  for f in "$(command -v fbink 2>/dev/null)" /usr/bin/fbink /usr/local/bin/fbink /mnt/us/libkh/bin/fbink \
+           /var/local/kmc/bin/fbink /mnt/us/extensions/MRInstaller/bin/KHF/fbink /mnt/us/extensions/MRInstaller/bin/PW2/fbink; do
+    [ -n "$f" ] && [ -x "$f" ] && { echo "$f"; return; }
+  done
+  f=$(find /var/local /mnt/us/libkh /mnt/us/extensions -name fbink -type f 2>/dev/null | head -n 1)
+  [ -n "$f" ] && [ -x "$f" ] && echo "$f"
+}
+
+draw_battery() {
+  [ "${SHOW_BATTERY:-1}" = 1 ] || return 0
+  txt="Pin $1%"
+  [ -z "$FBINK" ] && FBINK=$(find_fbink)
+  if [ -n "$FBINK" ]; then
+    # cột/dòng âm = đếm từ mép phải/mép dưới
+    "$FBINK" -q -x -$(( ${#txt} + ${BATTERY_COL_PAD:-2} )) -y -${BATTERY_ROW:-2} "$txt" 2>>"$LOG" && return 0
+  fi
+  # dự phòng: eips (lưới ô chữ 16x24 px trên màn 300ppi)
+  xres=$(cut -d, -f1 /sys/class/graphics/fb0/virtual_size 2>/dev/null); xres=${xres:-1072}
+  yres=$(cut -d, -f2 /sys/class/graphics/fb0/virtual_size 2>/dev/null); yres=${yres:-1448}
+  cols=$(( xres / 16 )); rows=$(( yres / 24 ))
+  eips $(( cols - ${#txt} - 2 )) $(( rows - 3 )) "$txt"
+}
+
 fetch_and_show() {
   wifi 1
   if ! wait_net; then
@@ -64,27 +91,32 @@ fetch_and_show() {
   sleep 1
   eips -g "$IMG"
   b=$(battery)
+  draw_battery "$b"
   if [ "$b" -lt "${LOW_BATTERY:-15}" ] 2>/dev/null; then
     eips 1 1 "PIN YEU ${b}% - HAY SAC"
   fi
-  log "Đã cập nhật (pin ${b}%)"
+  log "Đã cập nhật (pin ${b}%, vẽ pin bằng: ${FBINK:-eips})"
   return 0
+}
+
+# "HH:MM" hoặc "HH" -> số phút tính từ 0h
+to_min() {
+  hh=$(echo "$1" | cut -d: -f1 | sed 's/^0//'); mm=$(echo "$1" | grep ':' | cut -d: -f2 | sed 's/^0//')
+  echo $(( ${hh:-0} * 60 + ${mm:-0} ))
 }
 
 sleep_secs() {
   mins=${INTERVAL_MIN:-30}
   [ "$mins" -ge 5 ] 2>/dev/null || mins=5
-  h=$(date +%H | sed 's/^0//'); h=${h:-0}
-  ns=${NIGHT_START:-23}; ne=${NIGHT_END:-6}
+  ns=$(to_min "${NIGHT_START:-23}"); ne=$(to_min "${NIGHT_END:-6}")
+  now=$(( $(date +%H | sed 's/^0//;s/^$/0/') * 60 + $(date +%M | sed 's/^0//;s/^$/0/') ))
   if [ "$ns" != "$ne" ]; then
     night=0
-    if [ "$ns" -gt "$ne" ]; then { [ "$h" -ge "$ns" ] || [ "$h" -lt "$ne" ]; } && night=1
-    else { [ "$h" -ge "$ns" ] && [ "$h" -lt "$ne" ]; } && night=1; fi
+    if [ "$ns" -gt "$ne" ]; then { [ "$now" -ge "$ns" ] || [ "$now" -lt "$ne" ]; } && night=1
+    else { [ "$now" -ge "$ns" ] && [ "$now" -lt "$ne" ]; } && night=1; fi
     if [ $night -eq 1 ]; then
-      # ngủ tới giờ NIGHT_END (tính theo giờ tròn)
-      left=$(( (ne - h + 24) % 24 ))
-      [ $left -eq 0 ] && left=24
-      until_end=$(( left * 3600 - $(date +%M | sed 's/^0//;s/^$/0/') * 60 ))
+      until_end=$(( ((ne - now + 1440) % 1440) * 60 ))
+      [ $until_end -eq 0 ] && until_end=86400
       # NIGHT_INTERVAL_MIN > 0: ban đêm vẫn dậy làm mới mỗi N phút (không quá giờ NIGHT_END)
       nim=${NIGHT_INTERVAL_MIN:-0}
       if [ "$nim" -ge 5 ] 2>/dev/null && [ $(( nim * 60 )) -lt $until_end ]; then
@@ -94,6 +126,9 @@ sleep_secs() {
       fi
       return
     fi
+    # sắp tới giờ nghỉ đêm thì dậy đúng giờ đó, rồi ngủ thẳng tới sáng
+    to_night=$(( ((ns - now + 1440) % 1440) * 60 ))
+    if [ $to_night -gt 0 ] && [ $to_night -lt $(( mins * 60 )) ]; then echo $to_night; return; fi
   fi
   echo $(( mins * 60 ))
 }
