@@ -3,10 +3,8 @@ name: Cập nhật dashboard Kindle
 on:
   schedule:
     # Giờ trong cron là UTC (giờ VN = UTC + 7). GitHub có thể chạy trễ.
-    # 8:00–21:45 giờ VN: 15 phút/lần (01:00–14:45 UTC)
-    - cron: "*/15 1-14 * * *"
-    # 22:00, 22:15, 22:30 giờ VN (15:00–15:30 UTC). Sau 22:30 nghỉ tới 8:00 sáng.
-    - cron: "0,15,30 15 * * *"
+    # 8:00–22:30 giờ VN: 30 phút/lần (01:00–15:30 UTC). Sau 22:30 nghỉ tới 8:00 sáng.
+    - cron: "0,30 1-15 * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -57,6 +55,8 @@ jobs:
           # Cỡ chữ: 1.3 mặc định, nhỏ hơn thì hiện được nhiều việc hơn
           DASH_SCALE: "1.15"
           # Kích thước màn Kindle: Paperwhite 3 = 1072 x 1448 (PW5/Oasis = 1236 x 1648)
+          # Hướng màn hình: doc (dọc) / ngang (cổng sạc bên trái)
+          DASH_ORIENT: "ngang"
           DASH_PW: "1072"
           DASH_PH: "1448"
           DASH_FABLE_KEY: ${{ vars.DASH_FABLE_KEY }}

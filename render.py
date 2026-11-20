@@ -26,7 +26,10 @@ PW = int(os.environ.get("DASH_PW", "1236"))
 PH = int(os.environ.get("DASH_PH", "1648"))
 # Phóng to toàn bộ bố cục (chữ + khoảng cách). 1.0 = cỡ gốc, 1.3 = to hơn 30%.
 SCALE = float(os.environ.get("DASH_SCALE", "1.3"))
-W, H = round(PW / SCALE), round(PH / SCALE)   # kích thước "logic" dùng khi bố trí
+# Hướng màn hình (biến DASH_ORIENT): doc = dọc (mặc định) · ngang = vẽ ngang 1448x1072 rồi xoay 90° (cổng sạc bên trái)
+ORIENT = (os.environ.get("DASH_ORIENT") or "doc").strip().lower()
+CW, CH = (PH, PW) if ORIENT == "ngang" else (PW, PH)   # kích thước khung vẽ thật
+W, H = round(CW / SCALE), round(CH / SCALE)   # kích thước "logic" dùng khi bố trí
 TZ = ZoneInfo(os.environ.get("DASH_TZ", "Asia/Ho_Chi_Minh"))
 # Bỏ qua các lịch có tên trong danh sách này (phân tách bằng dấu phẩy)
 # Bố cục (biến DASH_LAYOUT): lich = ngày + thời tiết ở đầu (mặc định) · claude = bỏ đầu trang, mục Claude to ở trên cùng
@@ -196,7 +199,7 @@ def parse_payload(data: dict, today: date) -> tuple[list[Event], list[Task]]:
                 d1 = d0 + timedelta(days=1)
             d = d0
             while d < d1:
-                if today <= d <= today + timedelta(days=1):
+                if today <= d <= today + timedelta(days=45):
                     ev = Event(e["title"], None, None, e.get("location", ""), name)
                     ev.__dict__["day"] = d
                     events.append(ev)
@@ -218,8 +221,9 @@ def fetch_appscript(url: str, today: date) -> tuple[list[Event], list[Task]]:
     data = r.json()
     if "error" in data:
         raise SystemExit(f"Apps Script báo lỗi: {data['error']} (kiểm tra token trong DATA_URL)")
-    global CLAUDE_USAGE
+    global CLAUDE_USAGE, KINDLE
     CLAUDE_USAGE = data.get("claude")
+    KINDLE = data.get("kindle")
     if CLAUDE_USAGE:
         fb = _find_fable(CLAUDE_USAGE)
         print("Fable:", f"{fb.get('utilization')}%" if fb else "không thấy trong số liệu")
@@ -227,6 +231,7 @@ def fetch_appscript(url: str, today: date) -> tuple[list[Event], list[Task]]:
 
 
 # ---------------------------------------------------------------- mức dùng Claude
+KINDLE: dict | None = None         # {"battery": 60, "at": "..."} do Kindle gửi lên
 CLAUDE_USAGE: dict | None = None   # {"five_hour": {"utilization", "resets_at"}, "seven_day": {...}, "fetched_at"}
 THU_NGAN = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
 
@@ -243,10 +248,12 @@ def _reset_label(iso: str | None, now: datetime) -> str:
     return f"đặt lại {THU_NGAN[t.weekday()]} {t:%H:%M}"
 
 
-def draw_claude(d, y: int, usage: dict, now: datetime) -> int:
+def draw_claude(d, y: int, usage: dict, now: datetime, x0=None, x1=None) -> int:
     """Hai thanh: phiên 5 giờ + giới hạn tuần. Trả về y mới."""
+    L = MARGIN if x0 is None else x0
+    R = W - MARGIN if x1 is None else x1
     f_lab, f_pct, f_small = font("Bold", 24), font("Bold", 30), font("Regular", 22)
-    d.text((MARGIN, y), "CLAUDE", font=f_lab, fill=BLACK)
+    d.text((L, y), "CLAUDE", font=f_lab, fill=BLACK)
     fetched = usage.get("fetched_at")
     if fetched:
         try:
@@ -254,14 +261,14 @@ def draw_claude(d, y: int, usage: dict, now: datetime) -> int:
             age = (now - ft).total_seconds() / 3600
             if age > 2:
                 note = f"số liệu cũ, lúc {ft:%H:%M %d/%m}"
-                d.text((W - MARGIN - d.textlength(note, font=f_small), y + 2), note, font=f_small, fill=MID)
+                d.text((R - d.textlength(note, font=f_small), y + 2), note, font=f_small, fill=MID)
         except ValueError:
             pass
     y += 38
     gap = 40
-    col_w = (W - 2 * MARGIN - gap) / 2
+    col_w = (R - L - gap) / 2
     for i, (key, name) in enumerate((("five_hour", "Phiên hiện tại"), ("seven_day", "Tuần này"))):
-        x0 = MARGIN + i * (col_w + gap)
+        x0 = L + i * (col_w + gap)
         v = (usage.get(key) or {})
         pct = v.get("utilization")
         pct_txt = "--" if pct is None else f"{round(pct)}%"
@@ -666,13 +673,15 @@ def draw_icon(d, kind, cx, cy, s):
 
 
 # ---------------------------------------------------------------- vẽ
-def section_title(d, y, text, right=""):
+def section_title(d, y, text, right="", x0=None, x1=None):
+    x0 = MARGIN if x0 is None else x0
+    x1 = W - MARGIN if x1 is None else x1
     f = font("Bold", 28)
-    d.text((MARGIN, y), text.upper(), font=f, fill=BLACK)
+    d.text((x0, y), text.upper(), font=f, fill=BLACK)
     if right:
         fr = font("Medium", 26)
-        d.text((W - MARGIN - d.textlength(right, font=fr), y + 2), right, font=fr, fill=MID)
-    d.line([(MARGIN, y + 44), (W - MARGIN, y + 44)], fill=BLACK, width=3)
+        d.text((x1 - d.textlength(right, font=fr), y + 2), right, font=fr, fill=MID)
+    d.line([(x0, y + 44), (x1, y + 44)], fill=BLACK, width=3)
     return y + 62
 
 
@@ -696,7 +705,7 @@ def render(events: list[Event], tasks: list[Task], now: datetime, weather: Weath
     from lunar import solar_to_lunar, year_name
 
     today, tomorrow = now.date(), now.date() + timedelta(days=1)
-    img = Image.new("L", (PW, PH), WHITE)
+    img = Image.new("L", (CW, CH), WHITE)
     d = ScaledDraw(img)
     f_sub = font("Regular", 28)
 
@@ -852,6 +861,224 @@ def render(events: list[Event], tasks: list[Task], now: datetime, weather: Weath
     # ============ FOOTER
     d.line([(MARGIN, footer_y), (W - MARGIN, footer_y)], fill=LIGHT, width=2)
     d.text((MARGIN, footer_y + 16), (f"{THU[today.weekday()]} {today.day}/{today.month} · " if LAYOUT == "claude" else "") + f"Cập nhật {now.strftime('%H:%M %d/%m')}", font=font("Regular", 24), fill=MID)
+    draw_battery(d, footer_y + 16, now)
+    return img
+
+
+def battery_text(now: datetime) -> str:
+    """'Pin 60%' từ số liệu Kindle gửi lên (bỏ qua nếu cũ hơn 3 giờ)."""
+    k = KINDLE or {}
+    b = k.get("battery")
+    if b is None:
+        return ""
+    try:
+        at = datetime.fromisoformat(str(k.get("at")).replace("Z", "+00:00")).astimezone(TZ)
+        if (now - at).total_seconds() > 3 * 3600:
+            return ""
+    except ValueError:
+        pass
+    return f"Pin {round(float(b))}%"
+
+
+def draw_battery(d, y, now, x1=None):
+    t = battery_text(now)
+    if not t:
+        return
+    x1 = W - MARGIN if x1 is None else x1
+    f = font("Medium", 24)
+    low = KINDLE and float(KINDLE.get("battery", 100)) < 20
+    tw = d.textlength(t, font=f)
+    if low:   # pin yếu: chữ trắng nền đen
+        d.rounded_rectangle([x1 - tw - 24, y - 4, x1, y + 30], radius=17, fill=BLACK)
+        d.text((x1 - tw - 12, y), t, font=f, fill=WHITE)
+    else:
+        # vẽ biểu tượng pin nhỏ trước chữ
+        bx1 = x1 - tw - 12
+        bx0 = bx1 - 34
+        d.rounded_rectangle([bx0, y + 6, bx1 - 4, y + 24], radius=3, outline=MID, width=2)
+        d.line([(bx1 - 2, y + 11), (bx1 - 2, y + 19)], fill=MID, width=3)
+        lvl = max(0.0, min(1.0, float(KINDLE["battery"]) / 100))
+        if lvl > 0:
+            d.rounded_rectangle([bx0 + 4, y + 10, bx0 + 4 + (bx1 - bx0 - 12) * lvl, y + 20], radius=1, fill=MID)
+        d.text((x1 - tw, y), t, font=f, fill=MID)
+
+
+def draw_claude_header(d, y, x0, x1, usage, now):
+    """Đầu trang bố cục ngang: 2 khối Claude (Phiên hiện tại | Tuần này), chỉ số % to + giờ đặt lại."""
+    usage = usage or {}
+    stale = False
+    if usage.get("fetched_at"):
+        try:
+            ft = datetime.fromisoformat(usage["fetched_at"].replace("Z", "+00:00")).astimezone(TZ)
+            stale = (now - ft).total_seconds() > 7200
+        except ValueError:
+            pass
+    gap = 40
+    cw = (x1 - x0 - gap) / 2
+    f_lab, f_pct, f_rs = font("Bold", 24), font("Bold", 96), font("Medium", 26)
+    for i, (key, name) in enumerate((("five_hour", "Phiên hiện tại"), ("seven_day", "Tuần này"))):
+        cx = x0 + i * (cw + gap)
+        v = usage.get(key) or {}
+        pct = v.get("utilization")
+        d.text((cx, y), ("CLAUDE · " if i == 0 else "") + name.upper(), font=f_lab, fill=DARK)
+        if i == 1 and stale:
+            d.text((cx + d.textlength(name.upper(), font=f_lab) + 14, y), "(SỐ LIỆU CŨ)", font=f_lab, fill=BLACK)
+        d.text((cx - 4, y + 28), "--" if pct is None else f"{round(pct)}%", font=f_pct, fill=BLACK)
+        left, reset_at = _remaining(v.get("resets_at"), now)
+        if reset_at:
+            when = f"{reset_at:%H:%M}" if reset_at.date() == now.date() else f"{THU_NGAN[reset_at.weekday()]} {reset_at:%H:%M}"
+            d.text((cx, y + 138), fit(d, f"đặt lại {when}", f_rs, cw), font=f_rs, fill=MID)
+    if x1 - x0 > 0:
+        mx = x0 + cw + gap / 2
+        d.line([(mx, y + 8), (mx, y + 164)], fill=PALE, width=2)
+
+
+def draw_month(d, y, x0, x1, today, marked, y_max=None) -> int:
+    """Lịch cả tháng, tuần bắt đầu thứ Hai. Mỗi ô: ngày dương (to) + ngày âm (nhỏ). Hôm nay: ô đen. Có sự kiện: chấm dưới."""
+    import calendar
+    from lunar import solar_to_lunar
+    f_head = font("Bold", 28)
+    d.text((x0, y), f"THÁNG {today.month}/{today.year}", font=f_head, fill=BLACK)
+    ld, lm, _, _ = solar_to_lunar(today.day, today.month, today.year)
+    note = f"Âm lịch tháng {lm}"
+    fr = font("Medium", 24)
+    d.text((x1 - d.textlength(note, font=fr), y + 2), note, font=fr, fill=MID)
+    y += 44
+    d.line([(x0, y), (x1, y)], fill=BLACK, width=3)
+    y += 10
+    cell_w = (x1 - x0) / 7
+    fw = font("SemiBold", 20)
+    for i, n in enumerate(["T2", "T3", "T4", "T5", "T6", "T7", "CN"]):
+        cx = x0 + cell_w * (i + 0.5)
+        d.text((cx, y + 12), n, font=fw, fill=DARK if i < 6 else BLACK, anchor="mm")
+    y += 30
+    weeks = calendar.Calendar(0).monthdatescalendar(today.year, today.month)
+    row_h = 56 if y_max is None else max(56, min(96, (y_max - y) / len(weeks)))
+    big = row_h >= 70
+    f_day, f_lun = font("SemiBold", 32 if big else 26), font("Regular", 19 if big else 16)
+    for wk in weeks:
+        for i, dt in enumerate(wk):
+            cx = x0 + cell_w * (i + 0.5)
+            cy = y + row_h / 2
+            other = dt.month != today.month
+            is_today = dt == today
+            if is_today:
+                d.rounded_rectangle([cx - cell_w / 2 + 4, y + 2, cx + cell_w / 2 - 4, y + row_h - 2], radius=10, fill=BLACK)
+            col = WHITE if is_today else (PALE if other else (BLACK if dt >= today else MID))
+            d.text((cx, cy - 10), str(dt.day), font=f_day, fill=col, anchor="mm")
+            ldd, lmm, _, _ = solar_to_lunar(dt.day, dt.month, dt.year)
+            lt = f"{ldd}/{lmm}" if ldd == 1 else str(ldd)
+            d.text((cx, cy + (20 if big else 15)), lt, font=f_lun, fill=(PALE if is_today else (PALE if other else MID)), anchor="mm")
+            if dt in marked and not other:
+                r = 4
+                dx = cx + cell_w / 2 - 14
+                d.ellipse([dx - r, y + 10 - r, dx + r, y + 10 + r], fill=WHITE if is_today else BLACK)
+        y += row_h
+    return y
+
+
+# ---------------------------------------------------------------- bố cục ngang
+def render_landscape(events, tasks, now, weather) -> Image.Image:
+    """Màn ngang 1448x1072: đầu trang (ngày | thời tiết) + 2 cột (Claude & việc | lịch). Trả về ảnh đã xoay 90° cho Kindle."""
+    from lunar import solar_to_lunar, year_name
+
+    today, tomorrow = now.date(), now.date() + timedelta(days=1)
+    img = Image.new("L", (CW, CH), WHITE)
+    d = ScaledDraw(img)
+    f_sub = font("Regular", 28)
+
+    # ---- đầu trang: trái = mức dùng Claude (số % to + giờ đặt lại) · phải = thời tiết
+    y = 30
+    wx0 = W - MARGIN   # mép trái của khối thời tiết
+    if weather:
+        right = W - MARGIN
+        ft = font("Bold", 80)
+        t = f"{round(weather.temp)}°"
+        tw = d.textlength(t, font=ft)
+        d.text((right - tw, y + 4), t, font=ft, fill=BLACK)
+        draw_icon(d, weather.icon, int(right - tw - 66), y + 54, 48)
+        r2 = f"{weather.desc} {round(weather.tmin)}–{round(weather.tmax)}°"
+        r3 = f"Mưa {weather.rain}%" + (f" · AQI {weather.aqi}" if weather.aqi is not None else "")
+        fw = font("Medium", 26)
+        d.text((right - d.textlength(r2, font=fw), y + 106), r2, font=fw, fill=DARK)
+        d.text((right - d.textlength(r3, font=font("Regular", 24)), y + 140), r3, font=font("Regular", 24), fill=MID)
+        wx0 = right - max(tw + 140, d.textlength(r2, font=fw), d.textlength(r3, font=font("Regular", 24)))
+    draw_claude_header(d, y, MARGIN, wx0 - 50, CLAUDE_USAGE, now)
+    y += 190
+    d.line([(MARGIN, y), (W - MARGIN, y)], fill=BLACK, width=6)
+    y += 28
+    top = y
+
+    footer_y = H - 56
+    gap = 56
+    col = (W - 2 * MARGIN - gap) / 2
+    Lx0, Lx1 = MARGIN, MARGIN + col
+    Rx0, Rx1 = MARGIN + col + gap, W - MARGIN
+    d.line([((Lx1 + Rx0) / 2, top + 4), ((Lx1 + Rx0) / 2, footer_y - 20)], fill=PALE, width=2)
+
+    # ---- cột trái: việc cần làm + sắp tới
+    y = top
+    tasks_open = sorted(tasks, key=lambda t: (t.due is None, t.due or date.max, t.title.lower()))
+    overdue = sum(1 for t in tasks_open if t.due and t.due < today)
+    right = f"{len(tasks_open)} việc" + (f" · {overdue} quá hạn" if overdue else "")
+    y = section_title(d, y, "Việc cần làm", right if tasks_open else "", Lx0, Lx1)
+    f_task, box = font("Medium", 30), 32
+    if not tasks_open:
+        d.text((Lx0, y + 6), "Không còn việc nào!", font=font("Regular", 32), fill=MID)
+    up_reserve = 62 + 3 * 40 + 46 + 24 if events else 0   # chừa chỗ cho mục "Sắp tới" (ít nhất 3 dòng)
+    task_end = footer_y - up_reserve
+    for i, t in enumerate(tasks_open):
+        if y + 60 > task_end - (12 if i == len(tasks_open) - 1 else 50):
+            d.text((Lx0, y + 4), f"+ {len(tasks_open) - i} việc nữa", font=f_sub, fill=MID)
+            y += 40
+            break
+        tag = due_tag(t, today)
+        f_tag = font("SemiBold", 20)
+        tag_w = int(d.textlength(tag, font=f_tag)) + 24 if tag else 0
+        d.rounded_rectangle([Lx0, y + 4, Lx0 + box, y + 4 + box], radius=7, outline=BLACK, width=4)
+        tx_w = Lx1 - Lx0 - box - 20 - (tag_w + 16 if tag else 0)
+        d.text((Lx0 + box + 20, y + 20), fit(d, t.title, f_task, tx_w), font=f_task, fill=BLACK, anchor="lm")
+        if tag:
+            x1, x0 = Lx1, Lx1 - tag_w
+            if tag in ("Quá hạn", "Hôm nay"):
+                d.rounded_rectangle([x0, y + 4, x1, y + 36], radius=16, fill=BLACK)
+                d.text(((x0 + x1) / 2, y + 20), tag, font=f_tag, fill=WHITE, anchor="mm")
+            else:
+                d.rounded_rectangle([x0, y + 4, x1, y + 36], radius=16, outline=MID, width=2)
+                d.text(((x0 + x1) / 2, y + 20), tag, font=f_tag, fill=DARK, anchor="mm")
+        y += 58
+        d.line([(Lx0 + box + 24, y - 6), (Lx1, y - 6)], fill=PALE, width=2)
+        y += 4
+
+    # ---- cột trái (tiếp): lịch sắp tới
+    upcoming = sorted([e for e in events if (event_day(e) > today) or (e.all_day and event_day(e) == today)
+                       or (not e.all_day and e.end > now)],
+                      key=lambda e: (event_day(e), not e.all_day, e.start or now))
+    if upcoming:
+        y += 24
+        y = section_title(d, y, "Sắp tới", f"{len(upcoming)} sự kiện", Lx0, Lx1)
+        f_ev, f_dt = font("Regular", 28), font("Medium", 24)
+        date_w = 196
+        for i, e in enumerate(upcoming):
+            if y + 40 > footer_y - (12 if i == len(upcoming) - 1 else 46):
+                d.text((Lx0, y), f"+ {len(upcoming) - i} sự kiện khác", font=font("Regular", 24), fill=MID)
+                break
+            ed = event_day(e)
+            day_lbl = "Hôm nay" if ed == today else "Ngày mai" if ed == today + timedelta(days=1) \
+                else f"{THU_NGAN[ed.weekday()]} {ed.day}/{ed.month}"
+            when = day_lbl + ("" if e.all_day else f" {hm(e.start)}")
+            d.text((Lx0, y + 2), when, font=f_dt, fill=DARK)
+            live = (not e.all_day) and e.start <= now
+            d.text((Lx0 + date_w, y), fit(d, ("● " if live else "") + e.title, f_ev, Lx1 - Lx0 - date_w), font=f_ev, fill=BLACK)
+            y += 40
+
+    # ---- cột phải: lịch cả tháng (kèm âm lịch), chấm = ngày có lịch
+    draw_month(d, top, Rx0, Rx1, today, {event_day(e) for e in events}, footer_y - 24)
+
+    # ---- chân trang
+    d.line([(MARGIN, footer_y), (W - MARGIN, footer_y)], fill=LIGHT, width=2)
+    d.text((MARGIN, footer_y + 14), f"Cập nhật {now.strftime('%H:%M %d/%m')}", font=font("Regular", 24), fill=MID)
+    draw_battery(d, footer_y + 14, now)
     return img
 
 
@@ -861,6 +1088,7 @@ def main():
     ap.add_argument("--sample", help="file JSON dữ liệu mẫu (không gọi Google)")
     ap.add_argument("--layout", help="lich | claude (mặc định lấy từ DASH_LAYOUT)")
     ap.add_argument("--now", help="giả lập thời điểm, vd 2026-11-03T10:30")
+    ap.add_argument("--preview", help="(bố cục ngang) lưu thêm ảnh chưa xoay để xem trước")
     args = ap.parse_args()
 
     global LAYOUT
@@ -872,15 +1100,22 @@ def main():
         sample = json.loads(Path(args.sample).read_text(encoding="utf-8"))
         w = sample.get("weather")
         weather = Weather(**w) if w else None
-        global CLAUDE_USAGE
+        global CLAUDE_USAGE, KINDLE
         CLAUDE_USAGE = sample.get("claude")
+        KINDLE = sample.get("kindle")
     else:
         if os.environ.get("DATA_URL"):
             events, tasks = fetch_appscript(os.environ["DATA_URL"], now.date())
         else:
             events, tasks = fetch_google(now.date())
         weather = fetch_weather()
-    img = render(events, tasks, now, weather)
+    if ORIENT == "ngang":
+        img = render_landscape(events, tasks, now, weather)
+        if args.preview:
+            img.save(args.preview, optimize=True)
+        img = img.transpose(Image.ROTATE_90)   # xoay ngược chiều kim đồng hồ: cổng sạc nằm bên trái
+    else:
+        img = render(events, tasks, now, weather)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, optimize=True)

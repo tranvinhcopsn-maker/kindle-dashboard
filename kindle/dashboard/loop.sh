@@ -72,6 +72,13 @@ draw_battery() {
   eips $(( cols - ${#txt} - 2 )) $(( rows - 3 )) "$txt"
 }
 
+# Gửi % pin lên Apps Script để GitHub vẽ vào ảnh (cần DATA_URL trong config.sh)
+send_battery() {
+  [ -n "$DATA_URL" ] || return 0
+  curl -s -L -m 30 -o /dev/null -H 'Content-Type: application/json' \
+    --data "{\"battery\":$1}" "$DATA_URL&kind=kindle" 2>/dev/null || log "Gửi pin thất bại"
+}
+
 fetch_and_show() {
   wifi 1
   if ! wait_net; then
@@ -79,6 +86,7 @@ fetch_and_show() {
     wifi 0; sleep 15; wifi 1          # thử bật lại Wi-Fi một lần
     wait_net || { eips 1 1 "Khong co Wi-Fi - se thu lai sau"; return 1; }
   fi
+  send_battery "$(battery)"
   rm -f "$IMG"
   # thêm ?t=... để không bị bộ nhớ đệm CDN trả ảnh cũ
   curl -s -L -m 60 -o "$IMG" "$IMAGE_URL?t=$(date +%s)"
